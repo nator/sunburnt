@@ -29,6 +29,7 @@ class LuceneQuery(object):
             self._and = True
             self._or = self._not = self._pow = False
             self.boosts = []
+            self.prepend = None
         else:
             self.option_flag = original.option_flag
             self.terms = copy.copy(original.terms)
@@ -40,6 +41,7 @@ class LuceneQuery(object):
             self._not = original._not
             self._pow = original._pow
             self.boosts = copy.copy(original.boosts)
+            self.prepend = original.prepend
 
     def clone(self):
         return LuceneQuery(self.schema, original=self)
@@ -49,6 +51,8 @@ class LuceneQuery(object):
         s = unicode(self)
         if s:
             opts[self.option_flag] = s
+            if self.option_flag == 'q' and self.prepend:
+                opts['q'] =  u"%s%s"%(self.prepend,s)
         return opts
 
     def serialize_debug(self, indent=0):
@@ -267,6 +271,10 @@ class LuceneQuery(object):
         q._pow = value
         return q
         
+    def add_prepend(self, prepend):
+        self.prepend = prepend
+        return self
+    
     def add(self, args, kwargs):
         self.normalized = False
         _args = []
@@ -442,6 +450,16 @@ class SolrSearch(object):
         newself.query_obj.add_boost(kwargs, boost_score)
         return newself
 
+    def prepend_query(self, prepend, **kwargs):
+        if not self.query_obj:
+            raise TypeError("Can't prepend an empty query")
+        if not prepend:
+            raise ValueError("No prepend string supplied")
+        # store the boost for later so we can prepend it to the final query
+        newself = self.clone()
+        newself.query_obj.add_prepend(prepend)
+        return newself
+    
     def options(self):
         options = {}
         for option_module in self.option_modules:
@@ -576,6 +594,7 @@ class MoreLikeThisOptions(Options):
             "maxqt":int,
             "maxntp":int,
             "boost":bool,
+            "use_qt":bool,
             }
     def __init__(self, schema, original=None):
         self.schema = schema
@@ -632,6 +651,9 @@ class MoreLikeThisOptions(Options):
             opts["mlt.qf"] = " ".join(qf_arg)
 
         for opt_name, opt_value in self.kwargs.items():
+            if opt_name == 'use_qt' and opt_value:
+                opts["qt"] = "/mlt"
+                opts["mlt.match.include"] = "false"
             opt_type = self.opts[opt_name]
             opts["mlt.%s" % opt_name] = opt_type(opt_value)
 
