@@ -7,6 +7,7 @@ from .strings import WildcardString
 
 
 class LuceneQuery(object):
+    raw_query = False
     default_term_re = re.compile(r'^\w+$')
     range_query_templates = {
         "any": "[* TO *]%s",
@@ -30,6 +31,7 @@ class LuceneQuery(object):
             self._or = self._not = self._pow = False
             self.boosts = []
             self.prepend = None
+            self.raw_query = False
         else:
             self.option_flag = original.option_flag
             self.terms = copy.copy(original.terms)
@@ -42,6 +44,7 @@ class LuceneQuery(object):
             self._pow = original._pow
             self.boosts = copy.copy(original.boosts)
             self.prepend = original.prepend
+            self.raw_query = original.raw_query
 
     def clone(self):
         return LuceneQuery(self.schema, original=self)
@@ -80,6 +83,9 @@ class LuceneQuery(object):
                 subquery.serialize_debug(indent+2)
         print '%s%s' % (indentspace, '}')
 
+    def make_raw_query(self, args, kwargs):
+        self.raw_query = True
+    
     # Below, we sort all our value_sets - this is for predictability when testing.
     def serialize_term_queries(self, terms):
         s = []
@@ -88,7 +94,7 @@ class LuceneQuery(object):
                 field = self.schema.match_field(name)
             else:
                 field = self.schema.default_field
-            if isinstance(field, SolrUnicodeField):
+            if isinstance(field, SolrUnicodeField) and not self.raw_query:
                 value_set = [value.escape_for_lqs_term() for value in value_set]
             if name:
                 s += [u'%s:%s' % (name, value) for value in sorted(value_set)]
@@ -372,6 +378,11 @@ class SolrSearch(object):
 
     def clone(self):
         return SolrSearch(interface=self.interface, original=self)
+
+    def make_raw_query(self, *args, **kwargs):
+        newself = self.clone()
+        newself.query_obj.make_raw_query(args, kwargs)
+        return newself
 
     def Q(self, *args, **kwargs):
         q = LuceneQuery(self.schema)
