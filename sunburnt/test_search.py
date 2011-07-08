@@ -9,7 +9,8 @@ import datetime
 import mx.DateTime
 
 from .schema import SolrSchema, SolrError
-from .search import SolrSearch, PaginateOptions, FacetOptions, HighlightOptions, MoreLikeThisOptions, params_from_dict
+from .search import SolrSearch, PaginateOptions, SortOptions, FieldLimitOptions, FacetOptions, HighlightOptions, MoreLikeThisOptions, params_from_dict
+from .strings import RawString
 
 debug = False
 
@@ -87,26 +88,26 @@ good_query_data = {
 
     "filter_by_term":(
         (["hello"], {},
-         [("fq", u"hello"), ("q", "*")]),
+         [("fq", u"hello"), ("q", "*:*")]),
         (["hello"], {"int_field":3},
-         [("fq", u"hello AND int_field:3"), ("q", "*")]),
+         [("fq", u"hello AND int_field:3"), ("q", "*:*")]),
         (["hello", "world"], {},
-         [("fq", u"hello AND world"), ("q", "*")]),
+         [("fq", u"hello AND world"), ("q", "*:*")]),
         # NB this next is not really what we want,
         # probably this should warn
         (["hello world"], {},
-         [("fq", u"hello\\ world"), ("q", "*")]),
+         [("fq", u"hello\\ world"), ("q", "*:*")]),
         ),
 
     "filter_by_phrase":(
         (["hello"], {},
-         [("fq", u"hello"), ("q", "*")]),
+         [("fq", u"hello"), ("q", "*:*")]),
         (["hello"], {"int_field":3},
-         [("fq", u"int_field:3 AND hello"), ("q", "*")]),
+         [("fq", u"int_field:3 AND hello"), ("q", "*:*")]),
         (["hello", "world"], {},
-         [("fq", u"hello AND world"), ("q", "*")]),
+         [("fq", u"hello AND world"), ("q", "*:*")]),
         (["hello world"], {},
-         [("fq", u"hello\\ world"), ("q", "*")]),
+         [("fq", u"hello\\ world"), ("q", "*:*")]),
         ),
 
     "query":(
@@ -122,13 +123,13 @@ good_query_data = {
 
     "filter":(
         (["hello"], {},
-         [("fq", u"hello"), ("q", "*")]),
+         [("fq", u"hello"), ("q", "*:*")]),
         (["hello"], {"int_field":3},
-         [("fq", u"hello AND int_field:3"), ("q", "*")]),
+         [("fq", u"hello AND int_field:3"), ("q", "*:*")]),
         (["hello", "world"], {},
-         [("fq", u"hello AND world"), ("q", "*")]),
+         [("fq", u"hello AND world"), ("q", "*:*")]),
         (["hello world"], {},
-         [("fq", u"hello\\ world"), ("q", "*")]),
+         [("fq", u"hello\\ world"), ("q", "*:*")]),
         ),
 
     "query":(
@@ -167,9 +168,9 @@ good_query_data = {
         ([], {"sdouble_field":3}, # casting from int should work
          {"q":u"sdouble_field:3.0"}),
         ([], {"date_field":datetime.datetime(2009, 1, 1)},
-         {"q":u"date_field:2009-01-01T00:00:00.000000Z"}),
+         {"q":u"date_field:2009-01-01T00\\:00\\:00.000000Z"}),
         ([], {"date_field":mx.DateTime.DateTime(2009, 1, 1)},
-         {"q":u"date_field:2009-01-01T00:00:00.000000Z"}),
+         {"q":u"date_field:2009-01-01T00\\:00\\:00.000000Z"}),
         ),
 
     "query":(
@@ -180,38 +181,50 @@ good_query_data = {
         ([], {"int_field__gt":3},
          [("q", u"int_field:{3 TO *}")]),
         ([], {"int_field__rangeexc":(-3, 3)},
-         [("q", u"int_field:{-3 TO 3}")]),
+         [("q", u"int_field:{\-3 TO 3}")]),
         ([], {"int_field__rangeexc":(3, -3)},
-         [("q", u"int_field:{-3 TO 3}")]),
+         [("q", u"int_field:{\-3 TO 3}")]),
         ([], {"int_field__lte":3},
          [("q", u"int_field:[* TO 3]")]),
         ([], {"int_field__gte":3},
          [("q", u"int_field:[3 TO *]")]),
         ([], {"int_field__range":(-3, 3)},
-         [("q", u"int_field:[-3 TO 3]")]),
+         [("q", u"int_field:[\-3 TO 3]")]),
         ([], {"int_field__range":(3, -3)},
-         [("q", u"int_field:[-3 TO 3]")]),
+         [("q", u"int_field:[\-3 TO 3]")]),
         ([], {"date_field__lt":datetime.datetime(2009, 1, 1)},
-         [("q", u"date_field:{* TO 2009-01-01T00:00:00.000000Z}")]),
+         [("q", u"date_field:{* TO 2009\\-01\\-01T00\\:00\\:00.000000Z}")]),
         ([], {"date_field__gt":datetime.datetime(2009, 1, 1)},
-         [("q", u"date_field:{2009-01-01T00:00:00.000000Z TO *}")]),
+         [("q", u"date_field:{2009\\-01\\-01T00\\:00\\:00.000000Z TO *}")]),
         ([], {"date_field__rangeexc":(datetime.datetime(2009, 1, 1), datetime.datetime(2009, 1, 2))},
-         [("q", "date_field:{2009-01-01T00:00:00.000000Z TO 2009-01-02T00:00:00.000000Z}")]),
+         [("q", "date_field:{2009\\-01\\-01T00\\:00\\:00.000000Z TO 2009\\-01\\-02T00\\:00\\:00.000000Z}")]),
         ([], {"date_field__lte":datetime.datetime(2009, 1, 1)},
-         [("q", u"date_field:[* TO 2009-01-01T00:00:00.000000Z]")]),
+         [("q", u"date_field:[* TO 2009\\-01\\-01T00\\:00\\:00.000000Z]")]),
         ([], {"date_field__gte":datetime.datetime(2009, 1, 1)},
-         [("q", u"date_field:[2009-01-01T00:00:00.000000Z TO *]")]),
+         [("q", u"date_field:[2009\\-01\\-01T00\\:00\\:00.000000Z TO *]")]),
         ([], {"date_field__range":(datetime.datetime(2009, 1, 1), datetime.datetime(2009, 1, 2))},
-         [("q", u"date_field:[2009-01-01T00:00:00.000000Z TO 2009-01-02T00:00:00.000000Z]")]),
+         [("q", u"date_field:[2009\\-01\\-01T00\\:00\\:00.000000Z TO 2009\\-01\\-02T00\\:00\\:00.000000Z]")]),
         ([], {'string_field':['hello world', 'goodbye, cruel world']},
          [("q", u"string_field:goodbye,\\ cruel\\ world AND string_field:hello\\ world")]),
-
+        # Raw strings
+        ([], {'string_field':RawString("abc*???")},
+         [("q", "string_field:abc\\*\\?\\?\\?")]),
         ),
     }
 
 def check_query_data(method, args, kwargs, output):
     solr_search = SolrSearch(interface)
-    assert getattr(solr_search, method)(*args, **kwargs).params() == output
+    p = getattr(solr_search, method)(*args, **kwargs).params()
+    try:
+        assert p == output
+    except AssertionError:
+        if debug:
+            print p
+            print output
+            import pdb;pdb.set_trace()
+            raise
+        else:
+            raise
 
 def test_query_data():
     for method, data in good_query_data.items():
@@ -277,6 +290,12 @@ good_option_data = {
         ({"fields":["int_field", "text_field"], "prefix":"abc", "limit":3},
          {"facet":True, "facet.field":["int_field", "text_field"], "f.int_field.facet.prefix":"abc", "f.int_field.facet.limit":3, "f.text_field.facet.prefix":"abc", "f.text_field.facet.limit":3, }),
         ),
+    SortOptions:(
+        ({"field":"int_field"},
+         {"sort":"int_field asc"}),
+        ({"field":"-int_field"},
+         {"sort":"int_field desc"}),
+    ),
     HighlightOptions:(
         ({"fields":"int_field"},
          {"hl":True, "hl.fl":"int_field"}),
@@ -302,6 +321,20 @@ good_option_data = {
          {"mlt":True, "mlt.fl":"string_field,text_field", "mlt.qf":"text_field^0.25 string_field^0.75"}),
         ({"fields":"text_field", "count":1},
          {"mlt":True, "mlt.fl":"text_field", "mlt.count":1}),
+        ),
+    FieldLimitOptions:(
+        ({},
+         {}),
+        ({"fields":"int_field"},
+         {"fl":"int_field"}),
+        ({"fields":["int_field", "text_field"]},
+         {"fl":"int_field,text_field"}),
+        ({"score": True},
+         {"fl":"score"}),
+        ({"all_fields": True, "score": True},
+         {"fl":"*,score"}),
+        ({"fields":"int_field", "score": True},
+         {"fl":"int_field,score"}),
         ),
     }
 
@@ -329,6 +362,10 @@ bad_option_data = {
         {"sort":"yes"}, # invalid choice
         {"offset":-1}, # invalid value
         ),
+    SortOptions:(
+        {"field":"myarse"}, # Undefined field
+        {"field":"string_field"}, # Multivalued field
+        ),
     HighlightOptions:(
         {"fields":"myarse"}, # Undefined field
         {"oops":True}, # undefined option
@@ -345,9 +382,9 @@ bad_option_data = {
     }
 
 def check_bad_option_data(OptionClass, kwargs):
-    paginate = OptionClass(schema)
+    option = OptionClass(schema)
     try:
-        paginate.update(**kwargs)
+        option.update(**kwargs)
     except SolrError:
         pass
     else:
@@ -439,6 +476,7 @@ def check_complex_boolean_query(solr_search, query, output):
             print p
             print output
             import pdb;pdb.set_trace()
+            raise
         else:
             raise
     # And check no mutation of the base object
@@ -450,6 +488,7 @@ def check_complex_boolean_query(solr_search, query, output):
             print p
             print q
             import pdb;pdb.set_trace()
+            raise
 
 def test_complex_boolean_queries():
     solr_search = SolrSearch(interface)
@@ -471,7 +510,9 @@ param_encode_data = (
 )
 
 def check_url_encode_data(kwargs, output):
-    assert params_from_dict(**kwargs) == output
+    # Convert for pre-2.6.5 python
+    s_kwargs = dict((k.encode('utf8'), v) for k, v in kwargs.items())
+    assert params_from_dict(**s_kwargs) == output
 
 def test_url_encode_data():
     for kwargs, output in param_encode_data:

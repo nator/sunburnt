@@ -2,22 +2,12 @@ from __future__ import absolute_import
 
 import collections, copy, operator, re
 
-from .schema import SolrError, SolrUnicodeField, SolrBooleanField
-from .strings import WildcardString
+from .schema import SolrError, SolrBooleanField, SolrUnicodeField, WildcardFieldInstance
 
 
 class LuceneQuery(object):
     raw_query = False
     default_term_re = re.compile(r'^\w+$')
-    range_query_templates = {
-        "any": "[* TO *]%s",
-        "lt": "{* TO %s}",
-        "lte": "[* TO %s]",
-        "gt": "{%s TO *}",
-        "gte": "[%s TO *]",
-        "rangeexc": "{%s TO %s}",
-        "range": "[%s TO %s]",
-    }
     def __init__(self, schema, option_flag=None, original=None):
         self.schema = schema
         self.normalized = False
@@ -89,25 +79,33 @@ class LuceneQuery(object):
     # Below, we sort all our value_sets - this is for predictability when testing.
     def serialize_term_queries(self, terms):
         s = []
-        for name, value_set in sorted(terms.items()):
+        for name, value_set in terms.items():
             if name:
                 field = self.schema.match_field(name)
             else:
                 field = self.schema.default_field
-            if isinstance(field, SolrUnicodeField) and not self.raw_query:
-                value_set = [value.escape_for_lqs_term() for value in value_set]
             if name:
-                s += [u'%s:%s' % (name, value) for value in sorted(value_set)]
+                s += [u'%s:%s' % (name, value.to_query()) for value in value_set]
             else:
-                s += sorted(value_set)
-        return ' AND '.join(s)
+                s += [value.to_query() for value in value_set]
+        return u' AND '.join(sorted(s))
 
+    range_query_templates = {
+        "any": u"[* TO *]",
+        "lt": u"{* TO %s}",
+        "lte": u"[* TO %s]",
+        "gt": u"{%s TO *}",
+        "gte": u"[%s TO *]",
+        "rangeexc": u"{%s TO %s}",
+        "range": u"[%s TO %s]",
+    }
     def serialize_range_queries(self):
         s = []
-        for name, rel, value in sorted(self.ranges):
-            range = self.range_query_templates[rel] % value
-            s.append("%(name)s:%(range)s" % vars())
-        return ' AND '.join(s)
+        for name, rel, values in sorted(self.ranges):
+            range_s = self.range_query_templates[rel] % \
+                tuple(value.to_query() for value in sorted(values, key=lambda x: getattr(x, "value")))
+            s.append(u"%s:%s" % (name, range_s))
+        return u' AND '.join(s)
 
     def child_needs_parens(self, child):
         if len(child) == 1:
@@ -207,7 +205,7 @@ class LuceneQuery(object):
                              self.serialize_range_queries()]
                  if s]
             for q in self.subqueries:
-                op_ = 'OR' if self._or else 'AND'
+                op_ = u'OR' if self._or else u'AND'
                 if self.child_needs_parens(q):
                     u.append(u"(%s)"%q.__unicode__(level=level+1, op=op_))
                 else:
@@ -303,27 +301,40 @@ class LuceneQuery(object):
                 field_name, rel = k, 'eq'
             field = self.schema.match_field(field_name)
             if not field:
-                raise ValueError("%s is not a valid field name" % k)
+                if (k, v) != ("*", "*"):
+                    # the only case where wildcards in field names are allowed
+                    raise ValueError("%s is not a valid field name" % k)
+            elif not field.indexed:
+                raise SolrError("Can't query on non-indexed field '%s'" % field_name)
             if rel == 'eq':
                 self.add_exact(field_name, v, terms_or_phrases)
             else:
                 self.add_range(field_name, rel, v)
 
-    def add_exact(self, field_name, value, term_or_phrase):
-        if field_name:
-            field = self.schema.match_field(field_name)
-        else:
-            field = self.schema.default_field
-        values = field.serialize(value) # Might be multivalued
-        if isinstance(values, basestring):
+    def add_exact(self, field_name, values, term_or_phrase):
+        # We let people pass in a list of values to match.
+        # This really only makes sense for text fields or
+        # multivalued fields.
+        if not hasattr(values, "__iter__"):
             values = [values]
-        for value in values:
+        # We can only do a field_name == "*" if:
+        if field_name and field_name != "*":
+            field = self.schema.match_field(field_name)
+        elif not field_name:
+            field = self.schema.default_field
+        else: # field_name must be "*"
+            if len(values) == 1 and values[0] == "*":
+                self.terms["*"].add(WildcardFieldInstance.from_user_data())
+                return
+            else:
+                raise SolrError("If field_name is '*', then only '*' is permitted as the query")
+        insts = [field.instance_from_user_data(value) for value in values]
+        for inst in insts:
             if isinstance(field, SolrUnicodeField):
-                this_term_or_phrase = term_or_phrase or self.term_or_phrase(value)
-                value = WildcardString(value)
+                this_term_or_phrase = term_or_phrase or self.term_or_phrase(inst.value)
             else:
                 this_term_or_phrase = "terms"
-            getattr(self, this_term_or_phrase)[field_name].add(value)
+            getattr(self, this_term_or_phrase)[field_name].add(inst)
 
     def add_range(self, field_name, rel, value):
         field = self.schema.match_field(field_name)
@@ -337,14 +348,14 @@ class LuceneQuery(object):
             except (AssertionError, TypeError):
                 raise SolrError("'%s__%s' argument must be a length-2 iterable"
                                  % (field_name, rel))
-            value = tuple(sorted(field.serialize(v) for v in value))
+            insts = tuple(sorted(field.instance_from_user_data(v) for v in value))
         elif rel == 'any':
             if value is not True:
                 raise SolrError("'%s__%s' argument must be True")
-            value = ''
+            insts = ()
         else:
-            value = field.serialize(value)
-        self.ranges.add((field_name, rel, value))
+            insts = (field.instance_from_user_data(value),)
+        self.ranges.add((field_name, rel, insts))
 
     def term_or_phrase(self, arg, force=None):
         return 'terms' if self.default_term_re.match(arg) else 'phrases'
@@ -354,23 +365,26 @@ class LuceneQuery(object):
             field = self.schema.match_field(k)
             if not field:
                 raise ValueError("%s is not a valid field name" % k)
-            value = field.serialize(v)
+            elif not field.indexed:
+                raise SolrError("Can't query on non-indexed field '%s'" % field_name)
+            value = field.instance_from_user_data(v)
         self.boosts.append((kwargs, boost_score))
 
 
 class SolrSearch(object):
-    option_modules = ('query_obj', 'filter_obj', 'paginator', 'more_like_this', 'highlighter', 'faceter', 'sorter', 'facet_querier')
+    option_modules = ('query_obj', 'filter_obj', 'paginator', 'more_like_this', 'highlighter', 'faceter', 'sorter', 'facet_querier', 'field_limiter',)
     def __init__(self, interface, original=None):
         self.interface = interface
         self.schema = interface.schema
         if original is None:
-            self.query_obj = LuceneQuery(self.schema, 'q')
-            self.filter_obj = LuceneQuery(self.schema, 'fq')
+            self.query_obj = LuceneQuery(self.schema, u'q')
+            self.filter_obj = LuceneQuery(self.schema, u'fq')
             self.paginator = PaginateOptions(self.schema)
             self.more_like_this = MoreLikeThisOptions(self.schema)
             self.highlighter = HighlightOptions(self.schema)
             self.faceter = FacetOptions(self.schema)
             self.sorter = SortOptions(self.schema)
+            self.field_limiter = FieldLimitOptions(self.schema)
             self.facet_querier = FacetQueryOptions(self.schema)
         else:
             for opt in self.option_modules:
@@ -449,6 +463,11 @@ class SolrSearch(object):
         newself.sorter.update(field)
         return newself
 
+    def field_limit(self, fields=None, score=False, all_fields=False):
+        newself = self.clone()
+        newself.field_limiter.update(fields, score, all_fields)
+        return newself
+
     def boost_relevancy(self, boost_score, **kwargs):
         if not self.query_obj:
             raise TypeError("Can't boost the relevancy of an empty query")
@@ -475,9 +494,10 @@ class SolrSearch(object):
         options = {}
         for option_module in self.option_modules:
             options.update(getattr(self, option_module).options())
-        if 'q' not in options:
-            options['q'] = '*' # search everything
-        return options
+        if u'q' not in options:
+            options[u'q'] = u'*:*' # search everything
+        # Next line is for pre-2.6.5 python
+        return dict((k.encode('utf8'), v) for k, v in options.items())
 
     def params(self):
         return params_from_dict(**self.options())
@@ -734,6 +754,43 @@ class SortOptions(Options):
             return {"sort":", ".join("%s %s" % (field, order) for order, field in self.fields)}
         else:
             return {}
+
+
+class FieldLimitOptions(Options):
+    option_name = "fl"
+
+    def __init__(self, schema, original=None):
+        self.schema = schema
+        if original is None:
+            self.fields = set()
+            self.score = False
+            self.all_fields = False
+        else:
+            self.fields = copy.copy(original.fields)
+            self.score = original.score
+            self.all_fields = original.all_fields
+
+    def update(self, fields=None, score=False, all_fields=False):
+        if fields is None:
+            fields = []
+        if isinstance(fields, basestring):
+            fields = [fields]
+        self.schema.check_fields(fields, {"stored": True})
+        self.fields.update(fields)
+        self.score = score
+        self.all_fields = all_fields
+
+    def options(self):
+        opts = {}
+        if self.all_fields:
+            fields = set("*")
+        else:
+            fields = self.fields
+        if self.score:
+            fields.add("score")
+        if fields:
+            opts['fl'] = ','.join(sorted(fields))
+        return opts
 
 
 class FacetQueryOptions(Options):

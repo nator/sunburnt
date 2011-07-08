@@ -7,6 +7,9 @@ import mx.DateTime
 import pytz
 
 from .schema import solr_date, SolrSchema, SolrError, SolrUpdate, SolrDelete
+from .search import LuceneQuery
+
+debug = False
 
 not_utc = pytz.timezone('Etc/GMT-3')
 
@@ -105,15 +108,7 @@ class TestReadingSchema(object):
                          ('text_field', 'text', u'text'),
                          ('text_field', u'text', u'text'),
                          ('boolean_field', True, u'true')):
-                             assert self.s.serialize_value(k, v) == v2
-
-    def test_serialize_value_fails(self):
-        try:
-            self.s.serialize_value('my_arse', 3)
-        except SolrError:
-            pass
-        else:
-            assert False
+                             assert self.s.field_from_user_data(k, v).to_solr() == v2
 
     def test_missing_fields(self):
         assert set(self.s.missing_fields([])) \
@@ -122,21 +117,17 @@ class TestReadingSchema(object):
             == set(['int_field', 'text_field'])
         assert set(self.s.missing_fields(['int_field'])) == set(['text_field'])
 
-    def test_serialize_value_list(self):
-        assert self.s.serialize_value('text_field', ["a", "b", "c"]) \
-            == [u"a", u"b", u"c"]
-
     def test_serialize_value_list_fails_with_bad_field_name(self):
         try:
-            self.s.serialize_value('text_field2', ["a", "b", "c"])
+            self.s.field_from_user_data('text_field2', "a")
         except SolrError:
             pass
         else:
             assert False
 
-    def test_serialize_value_list_fails_when_not_multivalued(self):
+    def test_serialize_value_list_fails_when_wrong_datatype(self):
         try:
-            self.s.serialize_value('int_field', ["a", "b", "c"])
+            self.s.field_from_user_data('int_field', "a")
         except SolrError:
             pass
         else:
@@ -203,6 +194,32 @@ class D(object):
             self.my_arse = my_arse
 
 
+class StringWrapper(object):
+    def __init__(self, s):
+        self.s = s
+
+    def __unicode__(self):
+        return self.s
+
+
+class D_with_callables(object):
+    def __init__(self, int_field, text_field=None, my_arse=None):
+        self._int_field = int_field
+        if text_field:
+            self._text_field = text_field
+        if my_arse:
+            self._my_arse = my_arse
+
+    def int_field(self):
+        return self._int_field
+
+    def text_field(self):
+        return self._text_field
+
+    def my_arse(self):
+        return self._my_arse
+
+
 update_docs = [
     # One single dictionary, not making use of multivalued field
     ({"int_field":1, "text_field":"a"},
@@ -233,10 +250,31 @@ update_docs = [
     # Make sure we distinguish strings and lists
     ({"int_field":1, "text_field":"abcde"},
       """<add><doc><field name="int_field">1</field><field name="text_field">abcde</field></doc></add>"""),
+
+    # Check attributes which are objects to be converted.
+    (D(1, StringWrapper("a"), True),
+     """<add><doc><field name="int_field">1</field><field name="text_field">a</field></doc></add>"""),
+
+    # Check attributes which are callable methods.
+    (D_with_callables(1, "a", True),
+     """<add><doc><field name="int_field">1</field><field name="text_field">a</field></doc></add>"""),
+
+    # Check that strings aren't query-escaped
+    (D(1, "a b", True),
+     """<add><doc><field name="int_field">1</field><field name="text_field">a b</field></doc></add>"""),
     ]
 
 def check_update_serialization(s, obj, xml_string):
-    assert str(SolrUpdate(s, obj)) == xml_string
+    p = str(SolrUpdate(s, obj))
+    if debug:
+        try:
+            assert p == xml_string
+        except AssertionError:
+            print p
+            print xml_string
+            import pdb;pdb.set_trace()
+    else:
+        assert p == xml_string
 
 def test_update_serialization():
     s = SolrSchema(StringIO.StringIO(good_schema))
@@ -306,16 +344,82 @@ def test_delete_docs():
 
 
 delete_queries = [
-    ("search",
+    ([(["search"], {})],
      """<delete><query>search</query></delete>"""),
-    (["search1", "search2"],
+    ([(["search1"], {}), (["search2"], {})],
      """<delete><query>search1</query><query>search2</query></delete>"""),
+    ([([], {"*":"*"})],
+     """<delete><query>*:*</query></delete>"""),
     ]
 
-def check_delete_queries(s, query, xml_string):
-    assert str(SolrDelete(s, queries=query)) == xml_string
+def check_delete_queries(s, queries, xml_string):
+    p = str(SolrDelete(s, queries=[s.Q(*args, **kwargs) for args, kwargs in queries]))
+    if debug:
+        try:
+            assert p == xml_string
+        except AssertionError:
+            print p
+            print xml_string
+            import pdb;pdb.set_trace()
+            raise
+    else:
+        assert p == xml_string
 
 def test_delete_queries():
     s = SolrSchema(StringIO.StringIO(good_schema))
-    for query, xml_string in delete_queries:
-        yield check_delete_queries, s, query, xml_string
+    for queries, xml_string in delete_queries:
+        yield check_delete_queries, s, queries, xml_string
+
+
+new_field_types_schema = \
+"""
+<schema name="timetric" version="1.1">
+  <types>
+    <fieldType name="binary" class="solr.BinaryField"/>
+    <fieldType name="point" class="solr.PointType" dimension="2" subFieldSuffix="_d"/>
+    <fieldType name="location" class="solr.LatLonType" subFieldSuffix="_coordinate"/>
+    <fieldtype name="geohash" class="solr.GeoHashField"/>
+    <!-- And just to check it works: -->
+    <fieldType name="point3" class="solr.PointType" dimension="3" subFieldSuffix="_d"/>
+  </types>
+  <fields>
+    <field name="binary_field" required="false" type="binary"/>
+    <field name="point_field" required="false" type="point"/>
+    <field name="location_field" required="false" type="location"/>
+    <field name="geohash_field" required="false" type="geohash"/>
+    <field name="point3_field" required="false" type="point3"/>
+  </fields>
+ </schema>
+"""
+
+def test_binary_data_understood_ok():
+    s = SolrSchema(StringIO.StringIO(new_field_types_schema))
+    blob = "jkgh"
+    coded_blob = blob.encode('base64')
+    field_inst = s.field_from_user_data("binary_field", blob)
+    assert field_inst.value == blob
+    assert field_inst.to_solr() == coded_blob
+    binary_field = s.match_field("binary_field")
+    assert binary_field.from_solr(coded_blob) == blob
+
+
+def test_2point_data_understood_ok():
+    s = SolrSchema(StringIO.StringIO(new_field_types_schema))
+    user_data = (3.5, -2.5)
+    solr_data = "3.5,-2.5"
+    field_inst = s.field_from_user_data("geohash_field", user_data)
+    assert field_inst.value == user_data
+    assert field_inst.to_solr() == solr_data
+    point_field = s.match_field("geohash_field")
+    assert point_field.from_solr(solr_data) == user_data
+
+
+def test_3point_data_understood_ok():
+    s = SolrSchema(StringIO.StringIO(new_field_types_schema))
+    user_data = (3.5, -2.5, 1.0)
+    solr_data = "3.5,-2.5,1.0"
+    field_inst = s.field_from_user_data("point3_field", user_data)
+    assert field_inst.value == user_data
+    assert field_inst.to_solr() == solr_data
+    point_field = s.match_field("point3_field")
+    assert point_field.from_solr(solr_data) == user_data
