@@ -647,6 +647,10 @@ class SolrResponse(object):
         else:
             self.more_like_this = None
 
+        # spellcheck suggestions
+        self.spellcheck = dict((k, dict(v))
+                                 for k, v in details.get("spellcheck", ()))
+
         # can be computed by MoreLikeThisHandler
         termsNodes = doc.xpath("/response/*[@name='interestingTerms']")
         if len(termsNodes) == 1:
