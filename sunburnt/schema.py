@@ -153,7 +153,9 @@ class SolrField(object):
     def to_solr(self, value):
         return unicode(value)
 
-    def to_query(self, value):
+    def to_query(self, value, **kwargs):
+        if 'raw_query' in kwargs:
+            return RawString(self.to_solr(value))
         return RawString(self.to_solr(value)).escape_for_lqs_term()
 
     def from_solr(self, value):
@@ -167,7 +169,9 @@ class SolrUnicodeField(SolrField):
         else:
             return WildcardString(unicode(value))
 
-    def to_query(self, value):
+    def to_query(self, value, **kwargs):
+        if 'raw_query' in kwargs:
+            return value
         return value.escape_for_lqs_term()
 
     def from_solr(self, value):
@@ -320,8 +324,8 @@ class SolrFieldInstance(object):
     def to_solr(self):
         return self.field.to_solr(self.value)
 
-    def to_query(self):
-        return self.field.to_query(self.value)
+    def to_query(self, **kwargs):
+        return self.field.to_query(self.value,**kwargs)
 
     def to_user_data(self):
         return self.field.to_user_data(self.value)

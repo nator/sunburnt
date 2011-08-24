@@ -3,6 +3,7 @@ from __future__ import absolute_import
 import collections, copy, operator, re
 
 from .schema import SolrError, SolrBooleanField, SolrUnicodeField, WildcardFieldInstance
+from .strings import RawString
 
 
 class LuceneQuery(object):
@@ -45,7 +46,11 @@ class LuceneQuery(object):
         if s:
             opts[self.option_flag] = s
             if self.option_flag == 'q' and self.prepend:
-                opts['spellcheck.q'] = s
+                if self.raw_query:
+                    spellcheck_q = RawString(s).escape_for_lqs_term()
+                else:
+                    spellcheck_q = s
+                opts['spellcheck.q'] = spellcheck_q
                 opts['q'] =  u"%s%s"%(self.prepend,s)
         return opts
 
@@ -86,9 +91,9 @@ class LuceneQuery(object):
             else:
                 field = self.schema.default_field
             if name:
-                s += [u'%s:%s' % (name, value.to_query()) for value in value_set]
+                s += [u'%s:%s' % (name, value.to_query(**{'raw_query':self.raw_query})) for value in value_set]
             else:
-                s += [value.to_query() for value in value_set]
+                s += [value.to_query(**{'raw_query':self.raw_query}) for value in value_set]
         return u' AND '.join(sorted(s))
 
     range_query_templates = {
@@ -104,7 +109,7 @@ class LuceneQuery(object):
         s = []
         for name, rel, values in sorted(self.ranges):
             range_s = self.range_query_templates[rel] % \
-                tuple(value.to_query() for value in sorted(values, key=lambda x: getattr(x, "value")))
+                tuple(value.to_query(**{'raw_query':self.raw_query}) for value in sorted(values, key=lambda x: getattr(x, "value")))
             s.append(u"%s:%s" % (name, range_s))
         return u' AND '.join(s)
 
