@@ -47,11 +47,11 @@ class LuceneQuery(object):
             opts[self.option_flag] = s
             if self.option_flag == 'q' and self.prepend:
                 if self.raw_query:
-                    spellcheck_q = RawString(s).escape_for_lqs_term()
+                    opts['spellcheck.q'] = RawString(s).escape_for_lqs_term()
+                    opts['qq'] =  u"%s%s"%(self.prepend,s)
                 else:
-                    spellcheck_q = s
-                opts['spellcheck.q'] = spellcheck_q
-                opts['q'] =  u"%s%s"%(self.prepend,s)
+                    opts['spellcheck.q'] = s
+                    opts['q'] =  u"%s%s"%(self.prepend,s)
         return opts
 
     def serialize_debug(self, indent=0):
