@@ -45,6 +45,7 @@ class LuceneQuery(object):
         if s:
             opts[self.option_flag] = s
             if self.option_flag == 'q' and self.prepend:
+                opts['spellcheck.q'] = s
                 opts['q'] =  u"%s%s"%(self.prepend,s)
         return opts
 
