@@ -48,7 +48,7 @@ class LuceneQuery(object):
             if self.option_flag == 'q' and self.prepend:
                 if self.raw_query:
                     opts['spellcheck.q'] = RawString(s).escape_for_lqs_term()
-                    opts['qq'] =  u"%s%s"%(self.prepend,s)
+                    opts['qq'] =  u"%s"%(s)
                 else:
                     opts['spellcheck.q'] = s
                     opts['q'] =  u"%s%s"%(self.prepend,s)
