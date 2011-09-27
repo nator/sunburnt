@@ -22,6 +22,7 @@ class LuceneQuery(object):
             self._or = self._not = self._pow = False
             self.boosts = []
             self.prepend = None
+            self.bq = None
             self.raw_query = False
         else:
             self.option_flag = original.option_flag
@@ -35,6 +36,7 @@ class LuceneQuery(object):
             self._pow = original._pow
             self.boosts = copy.copy(original.boosts)
             self.prepend = original.prepend
+            self.bq = original.bq
             self.raw_query = original.raw_query
 
     def clone(self):
@@ -45,10 +47,13 @@ class LuceneQuery(object):
         s = unicode(self)
         if s:
             opts[self.option_flag] = s
-            if self.option_flag == 'q' and self.prepend:
+            if self.option_flag == 'q' and (self.prepend or self.bq):
                 if self.raw_query:
                     opts['spellcheck.q'] = RawString(s).escape_for_lqs_term()
-                    opts['qq'] =  u"%s"%(s)
+                    #opts['qq'] =  u"%s"%(s)
+                    #opts['q'] =  u"%s%s"%(self.prepend,s)
+                    #opts['bq'] =  u"(instances:{20110927 TO *})^1000 OR (display_type:Walker\ Shop)^20"
+                    opts['bq'] =  u"%s"%(self.bq)
                 else:
                     opts['spellcheck.q'] = s
                     opts['q'] =  u"%s%s"%(self.prepend,s)
@@ -283,6 +288,10 @@ class LuceneQuery(object):
         
     def add_prepend(self, prepend):
         self.prepend = prepend
+        return self
+    
+    def add_bq(self, bq):
+        self.bq = bq
         return self
     
     def add(self, args, kwargs):
@@ -603,6 +612,16 @@ class SolrSearch(BaseSearch):
         # store the boost for later so we can prepend it to the final query
         newself = self.clone()
         newself.query_obj.add_prepend(prepend)
+        return newself
+
+    def boost_query(self, bq, **kwargs):
+        if not self.query_obj:
+            raise TypeError("Can't bq an empty query")
+        if not bq:
+            raise ValueError("No bq string supplied")
+        # store the boost for later so we can prepend it to the final query
+        newself = self.clone()
+        newself.query_obj.add_bq(bq)
         return newself
 
     def options(self):
